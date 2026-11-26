@@ -1,0 +1,16 @@
+# 本地产物 / 调试文件
+.tmp/
+node_modules/
+*.log
+
+# 系统垃圾
+.DS_Store
+Thumbs.db
+desktop.ini
+
+# 渲染/导出的中间文件（不要进仓库）
+*.mid
+*.mp3
+*.ogg
+*.wav
+*.mscz

@@ -1,0 +1,291 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>Piano Falls — MVP</title>
+<style>
+  :root { color-scheme: dark; --rh: #41b8ff; --lh: #ffab49; }
+  * { box-sizing: border-box; }
+  html, body {
+    margin: 0; height: 100%; overflow: hidden;
+    background: radial-gradient(120% 85% at 50% 8%, #17233a 0%, #0b1220 52%, #05070c 100%);
+    font: 13px/1.55 ui-sans-serif, system-ui, "Segoe UI", "PingFang SC", "Microsoft YaHei", sans-serif;
+    color: #dbe4f0;
+  }
+  #stage { position: fixed; inset: 0; }
+  #stage canvas { display: block; }
+  #vignette {
+    position: fixed; inset: 0; pointer-events: none;
+    background: radial-gradient(115% 90% at 50% 40%, transparent 52%, rgba(0,0,0,.55) 100%);
+  }
+
+  #hud { position: fixed; left: 18px; top: 14px; pointer-events: none; text-shadow: 0 1px 4px rgba(0,0,0,.9); }
+  #hud h1 { margin: 0 0 6px; font-size: 12px; font-weight: 600; letter-spacing: .12em; color: #9fd4ff; }
+  #hud h1 small { margin-left: 6px; font-size: 10px; letter-spacing: .04em; opacity: .5; }
+  #status { margin: 0; white-space: pre-line; opacity: .78; font-variant-numeric: tabular-nums; }
+
+  #legend {
+    position: fixed; right: 18px; top: 94px; display: flex; gap: 14px; align-items: center;
+    opacity: .8; pointer-events: none; text-shadow: 0 1px 4px #000; z-index: 4;
+  }
+  #legend i { display: inline-block; width: 9px; height: 9px; border-radius: 2px; margin-right: 5px; vertical-align: -1px; }
+  #legend .rh { background: var(--rh); }
+  #legend .lh { background: var(--lh); }
+
+  /* 乐谱信息面板 */
+  /* 乐器窗格：内容画在画布上，这里是"窗口"外框 */
+  #panes { position: fixed; inset: 0; pointer-events: none; z-index: 3; }
+  .pane {
+    position: absolute; pointer-events: auto; border-radius: 12px;
+    box-shadow: 0 0 0 1px rgba(120,170,220,.2), 0 10px 30px rgba(0,0,0,.45);
+  }
+  .pane-head {
+    position: absolute; left: 0; right: 0; top: 0; height: 26px;
+    display: flex; align-items: center; gap: 8px; padding: 0 10px;
+    cursor: move; user-select: none;
+    font-size: 11px; letter-spacing: .08em; color: #9fd4ff;
+    background: linear-gradient(180deg, rgba(10,16,26,.95), rgba(10,16,26,.6));
+    border-bottom: 1px solid rgba(120,170,220,.16);
+    border-radius: 12px 12px 0 0;
+  }
+  .pane-head .pane-name { font-weight: 600; }
+  .pane-head .pane-kind {
+    opacity: .55; font-size: 10px; padding: 1px 6px;
+    border: 1px solid rgba(120,170,220,.25); border-radius: 6px;
+  }
+  .pane-head .pane-close {
+    margin-left: auto; cursor: pointer; opacity: .45; font-size: 15px; line-height: 1; padding: 0 4px;
+  }
+  .pane-head .pane-close:hover { opacity: 1; color: #ff9d9d; }
+  .pane-resize {
+    position: absolute; right: 0; bottom: 0; width: 16px; height: 16px;
+    cursor: nwse-resize; pointer-events: auto;
+  }
+  .pane-resize::after {
+    content: ''; position: absolute; right: 4px; bottom: 4px; width: 7px; height: 7px;
+    border-right: 2px solid rgba(120,190,255,.45); border-bottom: 2px solid rgba(120,190,255,.45);
+  }
+
+  /* 窗格开关列表 */
+  #paneList {
+    position: fixed; right: 18px; bottom: 122px; width: 210px; padding: 10px 12px;
+    background: rgba(10,16,26,.96); border: 1px solid rgba(120,170,220,.2);
+    border-radius: 12px; z-index: 30; font-size: 12px;
+  }
+  #paneList h3 { margin: 0 0 8px; font-size: 11px; letter-spacing: .1em; color: #9fd4ff; font-weight: 600; }
+  #paneList .pane-item { display: flex; align-items: center; gap: 8px; padding: 3px 0; cursor: pointer; }
+  #paneList .pane-item-kind { margin-left: auto; opacity: .45; font-size: 10px; }
+  #paneList .pane-reset {
+    width: 100%; margin-top: 8px; padding: 4px 8px; font-size: 11px;
+    background: transparent; border: 1px solid rgba(120,170,220,.22);
+  }
+
+  /* 声部开关 */
+  #partList {
+    position: fixed; right: 18px; bottom: 122px; width: 248px; padding: 10px 12px;
+    background: rgba(10,16,26,.97); border: 1px solid rgba(120,170,220,.2);
+    border-radius: 12px; z-index: 31; font-size: 12px;
+  }
+  #partList h3 { margin: 0 0 8px; font-size: 11px; letter-spacing: .1em; color: #9fd4ff; font-weight: 600; }
+  #partList .part-row { display: flex; align-items: center; gap: 10px; padding: 3px 0; }
+  #partList .part-name { min-width: 56px; opacity: .8; }
+  #partList label { display: flex; align-items: center; gap: 4px; font-size: 11px; opacity: .85; cursor: pointer; }
+  #partList .part-link { display: flex; margin-top: 8px; padding-top: 8px; border-top: 1px solid rgba(120,170,220,.14); }
+  #partList .part-hint { margin-top: 6px; font-size: 10px; opacity: .45; }
+  #partList .part-cache {
+    margin-top: 8px; padding-top: 8px; border-top: 1px solid rgba(120,170,220,.14);
+    display: flex; align-items: center; gap: 8px; font-size: 10px; opacity: .8;
+  }
+  #partList .part-cache span { flex: 1; }
+  #partList .part-cache .pane-reset { width: auto; margin: 0; padding: 3px 8px; }
+
+  /* 乐谱信息：一个真正的窗口（可拖/可缩放/可关闭/双击最大化） */
+  #info {
+    position: fixed; left: 18px; top: 92px; width: 340px; height: 372px;
+    display: none; flex-direction: column; overflow: hidden;
+    background: rgba(10,16,26,.97); border: 1px solid rgba(120,170,220,.22);
+    border-radius: 12px; box-shadow: 0 12px 40px rgba(0,0,0,.55);
+    z-index: 36; font-size: 12px;
+  }
+  #info.on { display: flex; }
+  #info .win-head {
+    flex: none; height: 28px; display: flex; align-items: center; gap: 8px; padding: 0 10px;
+    cursor: move; user-select: none;
+    font-size: 11px; letter-spacing: .1em; color: #9fd4ff; font-weight: 600;
+    background: linear-gradient(180deg, rgba(20,32,50,.95), rgba(10,16,26,.75));
+    border-bottom: 1px solid rgba(120,170,220,.16);
+  }
+  #info .win-close {
+    margin-left: auto; cursor: pointer; opacity: .5; font-size: 15px; line-height: 1;
+    padding: 0 4px; font-weight: 400;
+  }
+  #info .win-close:hover { opacity: 1; color: #ff9d9d; }
+  #info .win-body { flex: 1; overflow: auto; padding: 10px 14px 12px; }
+  #info .win-resize {
+    position: absolute; right: 0; bottom: 0; width: 16px; height: 16px; cursor: nwse-resize;
+  }
+  #info .win-resize::after {
+    content: ''; position: absolute; right: 4px; bottom: 4px; width: 7px; height: 7px;
+    border-right: 2px solid rgba(120,190,255,.45); border-bottom: 2px solid rgba(120,190,255,.45);
+  }
+  #info .row { display: flex; gap: 10px; padding: 2px 0; }
+  #info .k { min-width: 62px; opacity: .55; flex: none; }
+  #info .v { flex: 1; word-break: break-word; }
+  #info .sub { margin: 8px 0 2px; padding-top: 7px; border-top: 1px solid rgba(120,170,220,.14); opacity: .5; font-size: 11px; }
+
+  #panel {
+    position: fixed; left: 50%; bottom: 16px; transform: translateX(-50%);
+    display: flex; flex-direction: column; gap: 9px;
+    width: min(1000px, calc(100vw - 32px)); padding: 11px 15px 12px;
+    background: rgba(10,16,26,.78); border: 1px solid rgba(120,170,220,.16);
+    border-radius: 14px; backdrop-filter: blur(10px);
+  }
+  #seekRow { display: flex; align-items: center; gap: 10px; }
+  #seekRow .t { min-width: 52px; font-variant-numeric: tabular-nums; opacity: .7; font-size: 12px; }
+  #seek { flex: 1; height: 4px; accent-color: #4cc2ff; cursor: pointer; }
+  #ctrlRow { display: flex; flex-wrap: wrap; gap: 8px 13px; align-items: center; justify-content: center; }
+
+  /* 展开状态下也能一键收起的小把手 */
+  #barGrip {
+    height: 5px; width: 64px; margin: -5px auto 3px; flex: none;
+    border-radius: 999px; background: rgba(255,255,255,.45); cursor: pointer;
+  }
+  #barGrip:hover { background: rgba(255,255,255,.9); }
+  #panel.collapsed #barGrip { display: none; }
+
+  /* 播放时控制栏收成一条小白条，点一下才展开 */
+  #panel.collapsed {
+    width: 190px; min-height: 10px; height: 10px; padding: 0; gap: 0;
+    border-radius: 999px; background: rgba(255,255,255,.92);
+    border-color: rgba(255,255,255,.6); overflow: hidden; cursor: pointer;
+    transition: width .18s ease, height .18s ease;
+  }
+  #panel.collapsed > * { display: none; }
+  #panel.collapsed::after {
+    content: ''; position: absolute; inset: 0; border-radius: 999px;
+  }
+
+  /* 琴键上沿的拖拽条：拖动改变琴键高度 */
+  #keyGrip {
+    position: fixed; height: 10px; z-index: 18; cursor: ns-resize;
+    background: linear-gradient(to bottom, transparent, rgba(76,194,255,.55));
+    opacity: 0; transition: opacity .12s ease;
+  }
+  #keyGrip.on { opacity: 1; }
+  #keyGrip:hover, #keyGrip.dragging { opacity: 1; background: rgba(76,194,255,.85); }
+
+  button {
+    font: inherit; font-weight: 500; color: #eaf2ff; cursor: pointer;
+    padding: 5px 13px; border-radius: 9px;
+    background: rgba(90,150,220,.18); border: 1px solid rgba(120,180,240,.32);
+  }
+  button:hover { background: rgba(90,150,220,.32); }
+  button.primary { background: rgba(70,190,255,.26); border-color: rgba(110,220,255,.5); }
+  button.on { background: rgba(70,190,255,.34); border-color: rgba(110,220,255,.6); }
+
+  label { display: flex; align-items: center; gap: 6px; opacity: .85; white-space: nowrap; font-size: 12px; }
+  label.chk { cursor: pointer; }
+  input[type=range] { width: 84px; accent-color: #4cc2ff; }
+  input[type=checkbox] { accent-color: #4cc2ff; }
+  .val { min-width: 46px; font-variant-numeric: tabular-nums; opacity: .85; }
+
+  #hint {
+    position: fixed; left: 50%; bottom: 108px; transform: translateX(-50%);
+    font-size: 11px; opacity: .35; letter-spacing: .04em; pointer-events: none; white-space: nowrap;
+  }
+
+  #drop { position: fixed; inset: 0; display: none; place-items: center; z-index: 9;
+    background: rgba(5,10,20,.74); font-size: 15px; letter-spacing: .06em; }
+  #drop.on { display: grid; }
+
+  #fatal { position: fixed; inset: 0; display: none; place-items: center; z-index: 20;
+    background: rgba(6,10,18,.94); padding: 32px; text-align: center;
+    white-space: pre-line; color: #ffb4b4; }
+  #fatal.on { display: grid; }
+</style>
+</head>
+<body>
+  <div id="stage"></div>
+  <div id="vignette"></div>
+
+  <div id="hud">
+    <h1>PIANO FALLS <small id="ver"></small></h1>
+    <p id="status">点「播放」开始（首次会加载钢琴采样）</p>
+  </div>
+
+  <div id="legend"><span><i class="rh"></i>右手</span><span><i class="lh"></i>左手</span></div>
+
+  <div id="info">
+    <div class="win-head">
+      <span>乐谱信息</span>
+      <span class="win-close" title="关闭">×</span>
+    </div>
+    <div class="win-body"></div>
+    <div class="win-resize" title="拖动改变大小"></div>
+  </div>
+
+  <div id="hint">空格 播放/暂停 · ←/→ ±5s（Shift ±1s）· ↑/↓ 下落时长 · Home 归零</div>
+
+  <div id="keyGrip" title="拖动改变琴键高度"></div>
+  <div id="panel">
+    <div id="barGrip" title="收起控制栏"></div>
+    <div id="seekRow">
+      <span class="t" id="tNow">0:00.0</span>
+      <input id="seek" type="range" min="0" max="1000" step="1" value="0" aria-label="播放进度" />
+      <span class="t" id="tEnd">0:00.0</span>
+    </div>
+    <div id="ctrlRow">
+      <button id="play" class="primary">播放</button>
+      <button id="stop">停止</button>
+      <button id="demoBtn">示例</button>
+      <button id="fileBtn">载入 .mid / .mscz</button>
+      <input id="file" type="file" accept=".mid,.midi,.mscz,.mscx" hidden />
+      <button id="modeBtn">透视 3D</button>
+      <button id="infoBtn">乐谱信息</button>
+      <button id="splitV" title="窗格上下分栏">分栏</button>
+      <button id="splitH" title="窗格左右并排">并排</button>
+      <button id="gridBtn" title="窗格网格排列">网格</button>
+      <button id="panesBtn" title="显示/隐藏窗格">窗格</button>
+      <button id="partsBtn" title="左右手/各声部的显示与发声">声部</button>
+      <button id="cacheBtn" title="清理渲染缓存（音频渲染结果，删掉后下次载入会重新渲染）">缓存</button>
+      <label>下落 <input id="fall" type="range" min="0.8" max="6" step="0.1" value="2.6" /><span class="val" id="fallVal">2.6s</span></label>
+      <label>音画 <input id="lat" type="range" min="-300" max="300" step="10" value="0" /><span class="val" id="latVal">0ms</span></label>
+      <label>音量 <input id="vol" type="range" min="-30" max="0" step="1" value="-6" /></label>
+      <label>速度 <input id="speed" type="range" min="0.25" max="2" step="0.05" value="1" /><span class="val" id="speedVal">1.00×</span></label>
+      <label class="chk"><input id="measures" type="checkbox" checked /> 网格</label>
+    </div>
+  </div>
+
+  <div id="drop">松开以载入乐谱</div>
+  <div id="partList" hidden></div>
+  <div id="fatal"></div>
+
+  <script>
+    // CDN / 模块加载失败时页面不该是一片空白：10 秒还没起来就给一句话
+    setTimeout(function () {
+      if (window.__PIANO_READY__) return;
+      var el = document.getElementById('fatal');
+      if (!el) return;
+      el.textContent =
+        '没能加载起来。\n\n' +
+        '通常是 three / tone / @tonejs/midi 之一取不到：\n' +
+        '· 检查网络或代理，然后刷新\n' +
+        '· 打开控制台（F12）看是哪个请求红了\n' +
+        '· 版本号在 index.html 的 importmap 里，可以换版本再试';
+      el.classList.add('on');
+    }, 10000);
+  </script>
+
+  <script type="importmap">
+  {
+    "imports": {
+      "three": "https://cdn.jsdelivr.net/npm/three@0.170.0/build/three.module.js",
+      "tone": "https://cdn.jsdelivr.net/npm/tone@15/+esm",
+      "@tonejs/midi": "https://cdn.jsdelivr.net/npm/@tonejs/midi@2.0.28/+esm"
+    }
+  }
+  </script>
+  <script type="module" src="./src/main.js"></script>
+</body>
+</html>
