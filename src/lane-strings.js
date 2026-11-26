@@ -24,7 +24,7 @@ const STRING_COLORS = ['#0072B2', '#E69F00', '#009E73', '#CC79A7'];
 const STRING_NAMES = ['G', 'D', 'A', 'E'];
 // 弦与弦之间那条粗黑线的宽度（颜色一律止步于它两侧，绝不互相贴边）
 const SEP_W = 0.11;
-// 键盘上段（黑键那一排）不画分隔线（用户要求：黑键里面不能有缝），
+// 键盘上段（黑键那一排）不画分隔线，黑键区域必须保持整体无缝；
 // 粗黑线只出现在黑键下沿以下。
 const KEY_GAP = 0.03;
 
@@ -436,7 +436,7 @@ export function createStringsLane({ family, laneName } = {}) {
       for (const k of keyboard.keys) {
         const isHit = hit.has(k.midi);
         // 键的横坐标按它所属那条弦的区间裁一刀：跨过分隔线的部分不画，
-        // 否则会在黑线另一边露出一条别的颜色（用户说的"挨一块"）。
+        // 否则会在黑线另一边露出相邻弦的颜色，两块颜色糊在一起。
         const seg = state.segs?.[k.stringIndex];
         let kx = k.x;
         let kw = k.w;
