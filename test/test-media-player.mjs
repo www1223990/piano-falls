@@ -33,9 +33,14 @@ class FakeAudio {
 }
 
 const delays = [];
+const resets = []; // 硬对齐时把 delay 归零的次数
 class FakeDelay {
   constructor() {
-    this.delayTime = { setTargetAtTime: (v) => delays.push(+v.toFixed(4)) };
+    this.delayTime = {
+      setTargetAtTime: (v) => delays.push(+v.toFixed(4)),
+      setValueAtTime: (v) => resets.push(+v.toFixed(4)),
+      cancelScheduledValues: () => {},
+    };
   }
   connect(node) { return node; }
   disconnect() {}
@@ -110,7 +115,32 @@ const stems = [{ key: '1', bytes }, { key: '2', bytes }];
   p.dispose();
 }
 
-// ---- 3) 单轨（没分轨）时不做任何对齐动作 ----
+// ---- 3) 偏差大到几百毫秒：不能加 delay（会滑音/激光），改一次性硬对齐 ----
+{
+  const p = new MediaPlayer();
+  await p.load(stems);
+  await p.play({ delay: 0 });
+  p._clearAlign();
+  const els = p._els();
+  // 先来一个小偏差，把 WebAudio 链路建起来（正常路径）
+  els[0].currentTime = 10.0;
+  els[1].currentTime = 9.93;
+  p._alignTracks();
+  check(!!p.graph, '小偏差 → 建了链路');
+  // 再来一次大偏差（模拟起播抖动）：应该走硬对齐，而不是把 delay 拉到几百毫秒
+  delays.length = 0;
+  resets.length = 0;
+  els[1].currentTime = els[0].currentTime - 0.35;
+  p._alignTracks();
+  check(delays.length === 0, '偏差 350ms → 不再加 delay（否则就是那声"激光"）');
+  check(p.lastHardAlignSpread > 0.2, `记录了硬对齐偏差 ${p.lastHardAlignSpread}`);
+  check(els[0].currentTime === els[1].currentTime, '硬对齐后两条轨回到同一位置');
+  check(resets.length >= 2, 'delay 被归零（每轨一次）');
+  check(p.syncSpread() < 0.001, '对齐后 spread ≈ 0');
+  p.dispose();
+}
+
+// ---- 4) 单轨（没分轨）时不做任何对齐动作 ----
 {
   const p = new MediaPlayer();
   await p.load([{ key: 'mix', bytes }]);

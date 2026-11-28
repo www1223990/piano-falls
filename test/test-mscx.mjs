@@ -88,10 +88,18 @@ console.log('\n=== repeats：反复结构 ===');
   check(s.notes.filter((n) => n.midi === 76).length === 1, '1. 结尾只在第一遍弹（76 只 1 次）');
   check(s.notes.filter((n) => n.midi === 79).length === 2, '"%" 小节借用了上一小节（79 出现 2 次）');
 
+  // 两音颤音：两个半音符在整小节内按 c16（十六分）交替
   const trem = s.notes.filter((n) => n.midi === 60 || n.midi === 67);
-  check(trem.length === 2, '两音颤音解析出两个和弦');
-  check(trem[0].tick === trem[1].tick, '颤音两半同时开始（不是先后排）');
-  check(trem[0].dur === 1920 && trem[1].dur === 1920, `颤音占满整小节（${trem[0].dur}）`);
+  check(trem.length === 16, `两音颤音铺成 16 个交替音（${trem.length}）`);
+  check(trem.every((n) => n.dur === 120), '每个交替音是十六分（120 ticks）');
+  const byTick = new Map(trem.map((n) => [n.tick, n.midi]));
+  const seq = [];
+  for (let t = 13440; t < 13440 + 16 * 120; t += 120) seq.push(byTick.get(t));
+  check(
+    seq.join(',') === '60,67,60,67,60,67,60,67,60,67,60,67,60,67,60,67',
+    `A/B 交替铺满整小节（${seq.slice(0, 6).join(',')}…）`,
+  );
+  check(trem.filter((n) => n.midi === 60).length === 8, '每组各出现 8 次');
 
   const oct = s.notes.filter((n) => n.midi === 74 && n.tick === 15360);
   check(oct.length === 1, '八度线上的音被移调（谱面写的 62 → 74）');

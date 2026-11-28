@@ -16,6 +16,10 @@
 // 接口和 AudioPlayer / StemPlayer 保持一致，main.js 可以无缝替换。
 
 const ALIGN_MIN = 0.02; // 差 20ms 以内就不碰音频通路（已经听不出先后）
+// delay 只能用来修"小偏差"。偏差大到几百毫秒时加 delay，等于让那条轨滑音半秒——
+// 听感就是"滋～"一声（像激光/变调）。这种情况改用一次硬对齐（暂停→对齐→继续）。
+const ALIGN_MAX = 0.12;
+const ALIGN_RAMP = 0.15; // delay 变化的时间常数：太快会有可闻的滑音
 
 export class MediaPlayer {
   constructor() {
@@ -29,6 +33,7 @@ export class MediaPlayer {
     this.pendingFrom = 0;
     this.alignTimers = [];
     this.watchTimer = null;
+    this._lastHardAlign = 0; // 最近一次"硬对齐"的时间（防抖，1 秒最多一次）
     this.graph = null; // 多轨对齐用的 WebAudio 链路（只有真的跑偏了才建）
     this.masterKey = null;
     this.masterDelay = 0;
@@ -144,8 +149,9 @@ export class MediaPlayer {
     // 微小速度偏差（实测开启时 0.9985×，播久了画面和声音会慢慢分开）
     const stretch = Math.abs(r - 1) > 1e-3;
     for (const t of this.tracks.values()) {
-      t.el.preservesPitch = stretch;
-      t.el.playbackRate = r;
+      // 只在真的变了才写：拖速度条时每帧都重设 preservesPitch 会让浏览器重启动时间伸缩
+      if (t.el.preservesPitch !== stretch) t.el.preservesPitch = stretch;
+      if (Math.abs(t.el.playbackRate - r) > 1e-4) t.el.playbackRate = r;
     }
     return r;
   }
@@ -320,6 +326,11 @@ export class MediaPlayer {
     const items = this._soundTimes();
     const spread = Math.max(...items.map((i) => i.sound)) - Math.min(...items.map((i) => i.sound));
     if (spread <= ALIGN_MIN) return; // 已经齐了，别动
+    if (spread > ALIGN_MAX) {
+      // 差太多（起播抖动/某条轨被拖慢）：加 delay 会变成可闻的滑音，改成一次性硬对齐
+      this._hardAlign(spread);
+      return;
+    }
 
     const g = this._ensureGraph();
     if (!g) return;
@@ -329,15 +340,72 @@ export class MediaPlayer {
     let laggard = wired[0];
     for (const it of wired) if (it.sound < laggard.sound) laggard = it;
     for (const it of wired) {
-      const want = Math.max(0, Math.min(0.5, it.sound - target));
+      const want = Math.max(0, Math.min(ALIGN_MAX, it.sound - target));
       const node = g.nodes.get(it.key);
       if (Math.abs(want - node.sec) > 0.004) {
-        node.delay.delayTime.setTargetAtTime(want, g.ctx.currentTime, 0.03);
+        node.delay.delayTime.setTargetAtTime(want, g.ctx.currentTime, ALIGN_RAMP);
         node.sec = want;
       }
     }
     this.masterKey = laggard.key; // 用最慢的一轨当时钟：它的 delay 恒为 0
     this.masterDelay = 0;
+  }
+
+  /**
+   * 偏差太大时的一次性对齐：暂停全部 → 统一 currentTime → 继续播。
+   * 会有很短的断续（几十毫秒），但不会出现"滑音/激光"。
+   * 每秒最多一次，避免来回抖。
+   */
+  _hardAlign(spread) {
+    const now = performance.now();
+    if (this._lastHardAlign && now - this._lastHardAlign < 1000) return;
+    // 差到几秒以上就不是"抖动"了，对齐会把播放位置往前跳几十秒——宁可报出来，不硬来
+    if (spread > 5) {
+      this.desync = true;
+      this.lastHardAlignSpread = +spread.toFixed(3);
+      return;
+    }
+    // 反复硬对齐会变成"每次卡一下"：30 秒内超过 4 次就先放弃（下次重播再试）
+    this._hardAlignTries = (this._hardAlignTries || []).filter((t) => now - t < 30000);
+    if (this._hardAlignTries.length >= 4) {
+      this.lastHardAlignSpread = +spread.toFixed(3);
+      return;
+    }
+    this._hardAlignTries.push(now);
+    this._lastHardAlign = now;
+    this.desync = false;
+    const els = this._els();
+    if (!els.length) return;
+    // 以"最大声位置"为准（它对应已经播到的地方，退回去会重复一小段）
+    const target = Math.max(...els.map((e) => (Number.isFinite(e.currentTime) ? e.currentTime : 0)));
+    for (const el of els) el.pause();
+    for (const el of els) {
+      try {
+        el.currentTime = target;
+      } catch {
+        /* ignore */
+      }
+    }
+    for (const el of els) {
+      const p = el.play();
+      if (p && typeof p.catch === 'function') p.catch(() => {});
+    }
+    // delay 全部归零，让时钟重新等于元素时间
+    if (this.graph) {
+      for (const node of this.graph.nodes.values()) {
+        try {
+          node.delay.delayTime.cancelScheduledValues(this.graph.ctx.currentTime);
+          node.delay.delayTime.setValueAtTime(0, this.graph.ctx.currentTime);
+        } catch {
+          /* ignore */
+        }
+        node.sec = 0;
+      }
+    }
+    this.masterKey = null;
+    this.masterDelay = 0;
+    this.startOffset = target;
+    this.lastHardAlignSpread = +spread.toFixed(3);
   }
 
   _scheduleAlign(ms) {

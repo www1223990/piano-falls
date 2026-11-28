@@ -14,3 +14,4 @@ desktop.ini
 *.ogg
 *.wav
 *.mscz
+node_modules.orig/

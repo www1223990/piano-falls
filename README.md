@@ -105,6 +105,13 @@ node tools/run-tests.mjs mscx    # 只跑名字里含 mscx 的
 
 ## 改这个项目的时候
 
+- **日常更新流程**（改代码 → 让装好的那份跟着变）：
+  ```bash
+  npm test                                  # 10 个测试文件
+  node tools/sync-install.mjs "<安装目录>"   # 只复制运行时文件，不碰 .git/.tmp/test/tools
+  ```
+  然后刷新页面（页面开着会提示按 Ctrl+F5）。`<安装目录>` 也可以用 `PF_INSTALL_DIR` 传。
+  **提交/推送不在日常流程里**——攒一批再统一提交，免得零零碎碎的提交。
 - **版本号只改两处**：`src/version.js` 和 `package.json`（测试会拦住不一致）。
   页面标题和 HUD 的版本号都从这里来，别再抄第三份。
 - **不要写死路径**：MuseScore 用 `MUSESCORE_BIN`，端口用 `PORT`，脚本用参数/环境变量。
@@ -117,7 +124,6 @@ node tools/run-tests.mjs mscx    # 只跑名字里含 mscx 的
 
 - 需要 MuseScore 4 才能出原谱音色；没有就退化成合成钢琴（音高对、音色不对）
 - 只画键盘乐器 + 弦乐指板；管乐/打击乐还没做
-- 两音颤音画成"两个和弦按住整小节"，没有 16 分交替动画
 - 倚音起音比 MuseScore 早/晚约 0.1 秒（视觉上察觉不到）
 - 谱面本身写错（小节时值不满/超出）时，只能尽力对齐，会在控制台给警告
 

@@ -154,6 +154,49 @@ function shiftAtTick(ranges, tick) {
   return shift;
 }
 
+/**
+ * 预扫一个小节里的八度线起点（tick 可能在小节中间）。
+ * 必须在"发音符"之前算好：八度线可能写在后面的声部里，等走到它时前面的音已经发出去了。
+ */
+function ottavaSpansOf(measureEl, measureStart, measureLen, division) {
+  const out = [];
+  const voices = childrenOf(measureEl, 'voice');
+  for (const container of voices.length ? voices : [measureEl]) {
+    let cursor = measureStart;
+    let tuplet = null;
+    for (const el of kids(container)) {
+      if (el.name === 'Spanner') {
+        if (attrOf(el, 'type', '') !== 'Ottava') continue;
+        const ott = child(el, 'Ottava');
+        const shift = OTTAVA_SHIFT[textOf(child(ott, 'subtype'))];
+        const noPlay = textOf(child(ott, 'play')) === '0';
+        if (!shift || noPlay || !child(el, 'next')) continue;
+        const span = Math.max(1, numOf(pathOf(el, 'next/location'), 'measures', 1));
+        out.push({ start: cursor, end: cursor + span * measureLen, shift });
+        continue;
+      }
+      if (el.name === 'Tuplet') {
+        const normal = numOf(el, 'normalNotes', 0);
+        const actual = numOf(el, 'actualNotes', 0);
+        if (normal > 0 && actual > 0) tuplet = { normal, actual, left: actual, counted: false };
+        continue;
+      }
+      if (el.name === 'endTuplet') {
+        tuplet = null;
+        continue;
+      }
+      if (el.name === 'Chord') {
+        if (!isGraceChord(el)) cursor += eventTicks(el, measureLen, division, tuplet);
+        continue;
+      }
+      if (el.name === 'Rest') {
+        cursor += eventTicks(el, measureLen, division, tuplet);
+      }
+    }
+  }
+  return out;
+}
+
 function hasTag(node, name) {
   return kids(node).some((k) => k.name === name);
 }
@@ -449,6 +492,7 @@ export function parseMscx(xmlText) {
       let cursor = measureStart;
       let tuplet = null;
       let tremoloPartner = false; // 两音颤音的第二组和弦（不推进游标）
+      let pendingTrem = null; // 等第二组和弦到了再铺交替
       // 新版 mscx 用 <endTuplet/> 显式结束，连里面的休止符也一起缩放；
       // 老格式没有这个标签，只能按 actualNotes 计数。
       const scoped = kids(containers[voiceIndex]).some((k) => k.name === 'endTuplet');
@@ -492,21 +536,10 @@ export function parseMscx(xmlText) {
             break;
           }
 
-          case 'Spanner': {
-            // 八度线：起点就在当前游标（可能在小节中间），往后 span 个小节结束
-            if (attrOf(el, 'type', '') === 'Ottava') {
-              const ott = child(el, 'Ottava');
-              const shift = OTTAVA_SHIFT[textOf(child(ott, 'subtype'))];
-              const noPlay = textOf(child(ott, 'play')) === '0';
-              if (shift && !noPlay && child(el, 'next')) {
-                const span = Math.max(1, numOf(pathOf(el, 'next/location'), 'measures', 1));
-                const list = ottavaRanges.get(staffId) ?? [];
-                list.push({ start: cursor, end: cursor + span * measureLen, shift });
-                ottavaRanges.set(staffId, list);
-              }
-            }
+          case 'Spanner':
+            // 八度线在预扫里统一登记（见 ottavaSpansOf）：它可能挂在后面的声部里，
+            // 到这个时候再登记就晚了 —— 早先声部的音已经发出去了。
             break;
-          }
 
           case 'Chord': {
             // 倚音带 <durationType>，但它是零时值的装饰音：不能算进拍子，
@@ -520,19 +553,44 @@ export function parseMscx(xmlText) {
               const label = describeDuration(dtLabel, numOf(el, 'dots', 0));
               noteValues.set(label, (noteValues.get(label) || 0) + 1);
             }
-            // 两音颤音（TremoloTwoChord）：一个"小节"里写着两个半音符，
-            // 实际是两组和弦在整小节内快速交替，两个和弦**同时开始、占满整小节**。
-            // 按顺序排会让小节溢出（Cancan 结尾 1920≠960，多出来的音压到下一小节）。
-            const twoChordTrem = kids(el).some((k) => k.name === 'TremoloTwoChord');
-            const isPartner = tremoloPartner;
-            const startAt = isPartner ? measureStart : cursor;
-            const soundDur = twoChordTrem || isPartner ? Math.max(0, measureLen) : dur;
-            const shift = shiftAtTick(ottavaRanges.get(staffId), startAt);
+            // 八度线按"这个音实际落在哪个 tick"查：同一个和弦在不同位置可能不在线内
+            const trem = kids(el).find((k) => k.name === 'TremoloTwoChord');
+            const pitchTick = trem ? measureStart : cursor;
+            const shift = shiftAtTick(ottavaRanges.get(staffId), pitchTick);
+            const pitches = [];
             for (const noteEl of noteEls) {
               const midi = numOf(noteEl, 'pitch', NaN) + shift;
               if (!Number.isFinite(midi) || midi < 0 || midi > 127) continue;
+              pitches.push({ midi, tie: isTieStart(noteEl) });
+            }
+            // 两音颤音（TremoloTwoChord）：一个"小节"里写着两个半音符，实际是两组和弦
+            // 在整小节内**快速交替**（速度看 <subtype>，c16 = 十六分）。
+            // 两个和弦要一起处理：先把第一个存起来，等第二个到了再铺交替。
+            if (trem) {
+              const stepTicks = tremoloStep(textOf(child(trem, "subtype")), division);
+              pendingTrem = {
+                pitches,
+                vel,
+                start: measureStart,
+                len: Math.max(0, measureLen),
+                step: stepTicks || Math.max(1, measureLen),
+              };
+              tremoloPartner = true;
+              cursor = measureStart + measureLen; // 整小节已被占满
+              break;
+            }
+            if (pendingTrem) {
+              // 第二组和弦到了：把 A/B/A/B… 铺满整小节
+              emitTremolo(notes, pendingTrem, pitches, { staffId, partIndex: partInfo ? partInfo.part.index : -1, hand: handOf(partInfo), voice: voiceIndex }, countByStaff);
+              pendingTrem = null;
+              tremoloPartner = false;
+              break;
+            }
+            const startAt = cursor;
+            const soundDur = dur;
+            for (const p of pitches) {
               notes.push({
-                midi,
+                midi: p.midi,
                 tick: startAt,
                 dur: soundDur,
                 vel,
@@ -540,19 +598,12 @@ export function parseMscx(xmlText) {
                 partIndex: partInfo ? partInfo.part.index : -1,
                 hand: handOf(partInfo),
                 voice: voiceIndex,
-                tie: isTieStart(noteEl),
+                tie: p.tie,
                 grace,
               });
               countByStaff.set(staffId, (countByStaff.get(staffId) || 0) + 1);
             }
-            if (twoChordTrem) {
-              tremoloPartner = true;
-              cursor = measureStart + measureLen; // 整小节已被占满
-            } else if (isPartner) {
-              tremoloPartner = false;
-            } else {
-              cursor += dur;
-            }
+            cursor += dur;
             break;
           }
 
@@ -564,6 +615,26 @@ export function parseMscx(xmlText) {
           default:
             break;
         }
+      }
+      // 第二组和弦没来（谱面残缺）：退回"按住第一组"的样子，别丢音
+      if (pendingTrem) {
+        for (const p of pendingTrem.pitches) {
+          notes.push({
+            midi: p.midi,
+            tick: pendingTrem.start,
+            dur: pendingTrem.len,
+            vel: pendingTrem.vel,
+            staffId,
+            partIndex: partInfo ? partInfo.part.index : -1,
+            hand: handOf(partInfo),
+            voice: voiceIndex,
+            tie: p.tie,
+            grace: false,
+          });
+          countByStaff.set(staffId, (countByStaff.get(staffId) || 0) + 1);
+        }
+        pendingTrem = null;
+        tremoloPartner = false;
       }
       filledMax = Math.max(filledMax, cursor - measureStart);
     }
@@ -579,6 +650,12 @@ export function parseMscx(xmlText) {
         // `%` 小节：内容借上一小节（src），时间轴用本小节（meta.len）
         const measureEl = staff.measures[entry.src];
         if (!measureEl) continue;
+        // 先登记这一小节里的八度线（起点可能在小节中间，也可能写在后面声部里）
+        for (const span of ottavaSpansOf(measureEl, playbackTick, meta.len, division)) {
+          const list = ottavaRanges.get(staff.id) ?? [];
+          list.push(span);
+          ottavaRanges.set(staff.id, list);
+        }
         const r = processMeasure(measureEl, staff.id, playbackTick, meta.len, staff.id === firstStaff.id);
         if (r.filled > 0 && Math.abs(r.filled - r.expected) > 2) {
           mismatch.push({ measure: entry.index + 1, staff: staff.id, expected: r.expected, actual: r.filled });
@@ -642,6 +719,42 @@ export function parseMscx(xmlText) {
     warnings,
     stats: { notesBeforeTieMerge: notes.length, measures: order.length },
   };
+}
+
+/** 两音颤音的交替间隔：<subtype>c16</subtype> → 十六分音符 */
+const TREMOLO_STEP = { c4: 'quarter', c8: 'eighth', c16: '16th', c32: '32nd', c64: '64th', c128: '128th' };
+
+function tremoloStep(subtype, division) {
+  const dt = TREMOLO_STEP[String(subtype || '').toLowerCase()];
+  return dt ? durationTicks(dt, division, 0) : 0;
+}
+
+/**
+ * 把两音颤音铺成 A/B/A/B…（MuseScore 就是这么发声音的）。
+ * 实测《Cancan》结尾：c16 在 2/4 里每小节 8 次交替，和 MIDI 逐音对得上。
+ */
+function emitTremolo(notes, a, bPitches, info, countByStaff) {
+  const end = a.start + a.len;
+  const step = Math.max(1, a.step);
+  for (let t = a.start, i = 0; t < end; t += step, i++) {
+    const set = i % 2 === 0 ? a.pitches : bPitches;
+    const dur = Math.min(step, end - t);
+    for (const p of set) {
+      notes.push({
+        midi: p.midi,
+        tick: t,
+        dur,
+        vel: a.vel,
+        staffId: info.staffId,
+        partIndex: info.partIndex,
+        hand: info.hand,
+        voice: info.voice,
+        tie: p.tie,
+        grace: false,
+      });
+      countByStaff.set(info.staffId, (countByStaff.get(info.staffId) || 0) + 1);
+    }
+  }
 }
 
 /** 倚音（acciaccatura / grace8…16…32…64）：零时值，不占拍子 */

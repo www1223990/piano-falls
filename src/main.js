@@ -205,7 +205,7 @@ function refreshHud() {
     `${score.ignoredParts?.length ? ` · 已忽略 ${score.ignoredParts.map((p) => p.name).join('/')}` : ''}` +
     `${stage && stage.getMode() === '3d' ? ' · 3D' : ''}\n` +
     `${fmt(curScoreTime())} / ${fmt(totalDuration())} · ${fps} fps\n` +
-    `音源 ${src}${!usingAudio() && piano.source && piano.kind === 'salamander' ? `（${new URL(piano.source).host}）` : ''} · 输出延迟 ${(lat * 1000).toFixed(0)}ms · 偏移 ${userOffsetMs}ms · 下落 ${fallDuration().toFixed(1)}s${avDiff === null ? '' : ` · 音画差 ${avDiff}ms`}${ctxSuspended ? ' · ⚠ 声音未启用（点一下播放）' : ''}`;
+    `音源 ${src}${!usingAudio() && piano.source && piano.kind === 'salamander' ? `（${new URL(piano.source).host}）` : ''} · 输出延迟 ${(lat * 1000).toFixed(0)}ms · 偏移 ${userOffsetMs}ms · 下落 ${fallDuration().toFixed(1)}s${avDiff === null ? '' : ` · 音画差 ${avDiff}ms`}${ctxSuspended ? ' · ⚠ 声音未启用（点一下播放）' : ''}${usingAudio() && player?.desync ? ` · ⚠ 分轨不同步 ${Math.round(player.lastHardAlignSpread * 1000)}ms（重播可恢复）` : ''}`;
 }
 
 /** 有原谱音频时以它为时钟（time() 在预备段是负的） */

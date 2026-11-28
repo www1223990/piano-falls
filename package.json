@@ -1,6 +1,6 @@
 {
   "name": "piano-falls",
-  "version": "0.4.0",
+  "version": "0.4.2",
   "private": true,
   "type": "module",
   "description": "钢琴瀑布流：直接读 .mscz/.mscx，用本机 MuseScore 渲染原谱音频，音画同源",
